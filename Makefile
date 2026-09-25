@@ -14,7 +14,7 @@ build: audit
 	$(ACME) -f cbm -o $(PRG) $(SOURCE)
 
 run: build
-	$(VICE) -autostartprgmode 1 -autostart $(PRG)
+	$(VICE) +remotemonitor -initbreak ready -moncommands tools/vice_run.mon
 
 clean:
 	rm -rf $(BUILD_DIR)

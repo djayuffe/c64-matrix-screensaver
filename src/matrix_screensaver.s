@@ -1,6 +1,6 @@
 ;
 ; ============================================================
-;  C64 "Full Matrix" — v22 (VICE-friendly hotkeys + status OSD)
+;  C64 Matrix Screensaver
 ;  - Robust keys: each frame call CLRCHN ($FFCC) + SCNKEY ($FF9F) then GETIN.
 ;  - Live hotkeys: 1/2/3/4 speed, I toggle IRQ, F toggle font ($14↔$16), C churn.
 ;  - Status line on row 24 shows: SPD, IRQ ON/OFF, FONT 14/16, CHURN ON/OFF.
@@ -12,6 +12,7 @@ AUTO_RUN        = 1
 SPAWN_RATE_MASK = $01
 TAIL_LENGTH_MIN = 10
 TAIL_LENGTH_MAX = 20
+TAIL_LENGTH_RANGE = TAIL_LENGTH_MAX - TAIL_LENGTH_MIN + 1
 HEAD_WHITE      = 1
 SPEED_MAX_DIV   = 1
 RAIN_ROWS        = 24            ; rows 0..23; row 24 is reserved for status
@@ -124,7 +125,7 @@ Start:
   lda #$27
   sta Rand2
 
-  ; Seed all columns active
+  ; Seed all columns for a visible first-frame spawn.
   ldx #39
 SeedAll:
   lda #HEAD_PENDING
@@ -134,10 +135,7 @@ SeedAll:
   clc
   adc #1
   sta SpeedDiv,x
-  jsr Rand8
-  and #((TAIL_LENGTH_MAX - TAIL_LENGTH_MIN) & $FF)
-  clc
-  adc #TAIL_LENGTH_MIN
+  jsr RandTailLength
   sta TailLen,x
   lda #0
   sta SpeedCtr,x
@@ -166,9 +164,15 @@ Mainloop:
   sta StatusDirty
 .nskip:
   lda IrqEnabled
-  bne Mainloop         ; when IRQ is ON, updates happen in IRQ
+  beq Mainloop_DoUpdates
+  lda FramePending
+  beq Mainloop          ; raster IRQ has not reached its update point yet
+  lda #0
+  sta FramePending
 
-  ; Otherwise, run N steps per frame here
+Mainloop_DoUpdates:
+  ; Run N steps outside interrupt context. In IRQ mode the raster handler
+  ; supplies the frame tick; otherwise the polling loop supplies it.
   ldx StepsPerFrame
 Mainloop_DoSteps:
   jsr UpdateRain
@@ -213,7 +217,7 @@ DrawStatus:
   lda #$3A  ; ':'
   sta (PtrScr),y
   iny
-  ; digit StepsPerFrame (1..9) -> '1'..
+  ; digit StepsPerFrame (1..4) -> '1'..'4'
   lda StepsPerFrame
   clc
   adc #$30
@@ -456,13 +460,19 @@ EnableIRQ:
   sta SavedIrqLo
   lda $0315
   sta SavedIrqHi
+  lda VIC_IRQEN
+  sta SavedVicIrqEn
+  lda VIC_RASTER
+  sta SavedRaster
+  lda VIC_CTRL1
+  sta SavedCtrl1
   lda #$01
   sta IrqVectorSaved
 EnableIRQ_VectorSaved:
-  lda #$7F
-  sta $DC0D
-  sta $DD0D
-  lda #$01
+  ; Preserve normal CIA/KERNAL timing. Add only our raster source and
+  ; acknowledge it locally before chaining to the saved IRQ vector.
+  lda VIC_IRQEN
+  ora #$01
   sta VIC_IRQEN
   lda #$FA            ; raster 250
   sta VIC_RASTER
@@ -475,6 +485,8 @@ EnableIRQ_VectorSaved:
   sta $0314
   lda #>IRQ
   sta $0315
+  lda #$00
+  sta FramePending
   lda #$01
   sta IrqEnabled
   cli
@@ -482,14 +494,23 @@ EnableIRQ_VectorSaved:
 
 DisableIRQ:
   sei
+  ; Temporarily disable VIC sources while the original state is restored.
   lda #$00
   sta VIC_IRQEN
   lda #$01
   sta VIC_IRQ
+  lda SavedCtrl1
+  sta VIC_CTRL1
+  lda SavedRaster
+  sta VIC_RASTER
   lda SavedIrqLo
   sta $0314
   lda SavedIrqHi
   sta $0315
+  lda SavedVicIrqEn
+  sta VIC_IRQEN
+  lda #$00
+  sta FramePending
   lda #$00
   sta IrqEnabled
   cli
@@ -515,20 +536,20 @@ IRQ:
   pha
   tya
   pha
+  lda VIC_IRQ
+  and #$01
+  beq IRQ_Chain
   lda #$01
   sta VIC_IRQ
-  ; run N steps per IRQ frame
-  ldx StepsPerFrame
-IRQ_Steps:
-  jsr UpdateRain
-  dex
-  bne IRQ_Steps
+  lda #$01
+  sta FramePending
+IRQ_Chain:
   pla
   tay
   pla
   tax
   pla
-  jmp $EA31
+  jmp (SavedIrqLo)
 
 ; ---------------------- Clear screen ------------------------
 ClearScreen:
@@ -590,10 +611,7 @@ AdvanceColumn_NextRow:
   tay
   cpy #RAIN_ROWS
   bcc AdvanceColumn_InRange
-  ; went off-screen: reset inactive & maybe respawn
-  lda #HEAD_INACTIVE
-  sta HeadRow,x
-  rts
+  jmp AdvanceColumn_Drain
 
 AdvanceColumn_InRange:
   ; store new head row
@@ -687,6 +705,82 @@ AdvanceColumn_Skip2:
 AdvanceColumn_Done:
   rts
 
+; Continue fading the tail after the head leaves row 23. HeadRow is allowed to
+; advance through virtual rows below the screen until the final tail cell has
+; been cleared; only then does the column become inactive.
+AdvanceColumn_Drain:
+  tya
+  sta HeadRow,x
+
+  ; Previous head cell becomes light green while it remains on-screen.
+  sec
+  sbc #1
+  cmp #RAIN_ROWS
+  bcs AdvanceColumn_DrainSkip1
+  tay
+  lda ColLo,y
+  sta PtrCol
+  lda ColHi,y
+  sta PtrCol+1
+  txa
+  tay
+  lda #COL_LGRN
+  sta (PtrCol),y
+AdvanceColumn_DrainSkip1:
+
+  ; The next tail cell becomes green while it remains on-screen.
+  lda HeadRow,x
+  sec
+  sbc #2
+  cmp #RAIN_ROWS
+  bcs AdvanceColumn_DrainSkip2
+  tay
+  lda ColLo,y
+  sta PtrCol
+  lda ColHi,y
+  sta PtrCol+1
+  txa
+  tay
+  lda #COL_GRN
+  sta (PtrCol),y
+AdvanceColumn_DrainSkip2:
+
+  ; Erase the tail cell that is now beyond its configured length.
+  lda HeadRow,x
+  sec
+  sbc TailLen,x
+  sbc #1
+  bmi AdvanceColumn_DrainCheckDone
+  tay
+  jsr ClearRainCell
+AdvanceColumn_DrainCheckDone:
+  lda HeadRow,x
+  sec
+  sbc #RAIN_ROWS
+  cmp TailLen,x
+  bcc AdvanceColumn_Done
+  lda #HEAD_INACTIVE
+  sta HeadRow,x
+  rts
+
+; Clear row Y of the current column X. This routine is used only for rain rows.
+ClearRainCell:
+  lda RowLo,y
+  sta PtrScr
+  lda RowHi,y
+  sta PtrScr+1
+  lda ColLo,y
+  sta PtrCol
+  lda ColHi,y
+  sta PtrCol+1
+  txa
+  tay
+  lda #COL_BG
+  sta (PtrCol),y
+  lda #$20
+  sta (PtrScr),y
+  rts
+
 ; ---------------------- PRNG & Glyphs -----------------------
 Rand8:
   lda Rand
@@ -706,6 +800,17 @@ Rand8_Doeor2:
 Rand8_Noeor2:
   sta Rand2
   eor Rand
+  rts
+
+; Uniformly choose a tail length in the inclusive configured range. The
+; rejection step avoids the bias introduced by masking a non-power-of-two span.
+RandTailLength:
+  jsr Rand8
+  and #$0F
+  cmp #TAIL_LENGTH_RANGE
+  bcs RandTailLength
+  clc
+  adc #TAIL_LENGTH_MIN
   rts
 
 ; Matrixy: mostly graphics (64..127), occasional letters
@@ -767,8 +872,12 @@ StepsPerFrame: !byte 2
 CurrD018:      !byte $14
 ChurnEnabled:  !byte 1
 StatusDirty:   !byte 0
+FramePending:  !byte 0
 SavedIrqLo:    !byte $31
 SavedIrqHi:    !byte $EA
+SavedVicIrqEn: !byte 0
+SavedRaster:   !byte 0
+SavedCtrl1:    !byte 0
 IrqVectorSaved:!byte 0
 
 HeadRow:   !fill 40, HEAD_PENDING

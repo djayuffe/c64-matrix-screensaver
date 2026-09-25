@@ -1,0 +1,3 @@
+; VICE monitor playback script. It runs after the C64 KERNAL reaches BASIC-ready.
+load "build/c64-matrix-screensaver.prg" 0
+goto $2000

@@ -13,9 +13,20 @@
   so status labels display as letters.
 - Corrected the random-letter path to generate contiguous `A`–`Z` screen
   codes instead of a sparse unintended subset.
-- Preserved and restored the previous IRQ vector instead of forcing `$EA31`.
+- Added a drain state so a stream tail keeps fading and clears completely after
+  its head leaves the visible rows; it no longer freezes on screen.
+- Replaced masked tail-length selection with rejection sampling, providing an
+  unbiased value across every configured length from 10 through 20.
+- Changed raster IRQ mode into a lightweight frame scheduler. Rendering now
+  runs outside the interrupt handler, preventing long IRQ latency at higher
+  update speeds.
+- Preserved and restored the previous IRQ vector and VIC IRQ state. Raster mode
+  now chains through the saved vector and leaves normal CIA/KERNAL timing
+  enabled instead of silently disabling it.
 
 ## Verification
 
-`make audit` checks the key invariants in source form. `make build` assembles a
-CBM PRG and verifies the expected BASIC `SYS 8192` loader.
+`make audit` checks the key invariants in source form, including tail draining,
+unbiased tail selection, vector chaining, VIC-state restoration, and the
+absence of rendering work inside the IRQ handler. `make build` assembles a CBM
+PRG and verifies the expected BASIC `SYS 8192` loader.
