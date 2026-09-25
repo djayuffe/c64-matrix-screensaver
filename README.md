@@ -4,10 +4,11 @@ A PAL-friendly Commodore 64 text-mode Matrix rain screensaver. It renders a
 white-to-green character stream in all 40 columns while reserving the bottom
 screen row for a live status display.
 
-![C64 Matrix Screensaver running in VICE](assets/matrix-screensaver-vice.png)
+![Animated C64 Matrix Screensaver running in VICE](assets/matrix-screensaver-vice.gif)
 
-*Running in VICE: bright heads, fading green streams, and the protected status
-row. The image is an unmodified emulator capture of the built PRG.*
+*Six-frame looping VICE capture of the built PRG: bright heads, fading green
+streams, and the protected status row. The animation uses only live emulator
+frames, cropped to the C64 display and nearest-neighbour scaled for clarity.*
 
 ## Features
 
@@ -104,7 +105,8 @@ memory map.
   status-row protection, and IRQ-vector restoration.
 - `tools/vice_run.mon` — deterministic VICE startup script used by `make run`.
 - `AUDIT.md` — concrete fixes made during the independent import.
-- `assets/matrix-screensaver-vice.png` — verified VICE capture used above.
+- `assets/matrix-screensaver-vice.gif` — animated VICE capture used above.
+- `assets/matrix-screensaver-vice.png` — full-frame VICE screenshot.
 
 ## Limits
 
